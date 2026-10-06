@@ -1,0 +1,40 @@
+   name: Aktualizace volebních výsledků
+
+   on:
+     schedule:
+       - cron: "*/5 * 9-11 10 *"
+     workflow_dispatch:
+
+   permissions:
+     contents: write
+
+   concurrency:
+     group: update-election
+     cancel-in-progress: false
+
+   jobs:
+     update:
+       runs-on: ubuntu-latest
+       timeout-minutes: 5
+       steps:
+         - name: Stáhnout repozitář
+           uses: actions/checkout@v4
+
+         - name: Vygenerovat index.html z dat ČSÚ
+           run: python3 election_tracker.py
+
+         - name: Uložit změny
+           run: |
+             git config user.name "github-actions[bot]"
+             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+             if [ ! -f index.html ]; then
+               echo "index.html zatím neexistuje (data se nepodařilo stáhnout)."
+               exit 0
+             fi
+             git add index.html
+             if git diff --cached --quiet; then
+               echo "Žádná změna, nic se neukládá."
+             else
+               git commit -m "Aktualizace výsledků $(date -u +'%Y-%m-%d %H:%M') UTC"
+               git push
+             fi
