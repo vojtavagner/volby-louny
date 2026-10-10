@@ -31,10 +31,14 @@ from zoneinfo import ZoneInfo
 # --- Nastavení -------------------------------------------------------------
 
 KOD_ZASTUPITELSTVA = "565971"  # Louny
-DATA_URL = (
-    "https://volby.gov.cz/appdata/kv2026/20261009/odata/zastup/"
-    f"vysledky_obec_{KOD_ZASTUPITELSTVA}.xml"
-)
+OKRES = "CZ0424"  # okres Louny
+BASE_URL = "https://volby.gov.cz/appdata/kv2026/20261009/odata/"
+# Zkouší se oba zdroje ČSÚ a použije se ten s více sečtenými okrsky
+# (soubor za jedno zastupitelstvo se během sčítání neaktualizoval).
+DATA_URLS = [
+    BASE_URL + f"okresy/vysledky_obce_okres_{OKRES}.xml",
+    BASE_URL + f"zastup/vysledky_obec_{KOD_ZASTUPITELSTVA}.xml",
+]
 OFICIALNI_STRANKA = "https://volby.gov.cz/"
 OUTPUT_FILE = "index.html"
 KLAUZULE_PROCENT = 5
@@ -89,9 +93,13 @@ def parse_results(xml_bytes):
     root = ET.fromstring(xml_bytes)
     strip_namespaces(root)
 
-    obec = root.find(".//OBEC")
+    obec = None
+    for candidate in root.iter("OBEC"):
+        if candidate.get("KODZASTUP") == KOD_ZASTUPITELSTVA:
+            obec = candidate
+            break
     if obec is None:
-        raise RuntimeError("XML neobsahuje element OBEC (chyba na straně ČSÚ?).")
+        raise RuntimeError(f"XML neobsahuje obec s kódem {KOD_ZASTUPITELSTVA}.")
     ucast = obec.find(".//UCAST")
     if ucast is None:
         raise RuntimeError("XML neobsahuje element UCAST.")
@@ -363,6 +371,19 @@ def existing_signature(path):
     return match.group(1) if match else None
 
 
+def fetch_best():
+    """Stáhne všechny zdroje a vrátí ten nejaktuálnější."""
+    results, errors = [], []
+    for url in DATA_URLS:
+        try:
+            results.append(parse_results(download_xml(url)))
+        except Exception as error:
+            errors.append(str(error))
+    if not results:
+        raise RuntimeError("; ".join(errors))
+    return max(results, key=lambda d: (d["final"], d["districts_done"], d["generated"]))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--file", help="načíst XML z místního souboru místo stažení")
@@ -372,10 +393,9 @@ def main():
     try:
         if args.file:
             with open(args.file, "rb") as file:
-                xml_bytes = file.read()
+                data = parse_results(file.read())
         else:
-            xml_bytes = download_xml(DATA_URL)
-        data = parse_results(xml_bytes)
+            data = fetch_best()
     except Exception as error:
         # Stará stránka zůstane beze změny, běh v GitHub Actions neselže.
         print(f"::warning::Aktualizace přeskočena: {error}")
